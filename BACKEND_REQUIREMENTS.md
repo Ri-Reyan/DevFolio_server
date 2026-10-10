@@ -585,6 +585,6 @@ Account search, suspend/reactivate (with session revocation and email), admin pr
 
 <div align="center">
 
-_SkillProof AI · Backend Requirements · v1.0 · derived from the Product Roadmap (Phase 1 MVP in full detail)_
+_DevFolio · Backend Requirements · v1.0 · derived from the Product Roadmap (Phase 1 MVP in full detail)_
 
 </div>
