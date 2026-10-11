@@ -24,6 +24,7 @@
 4. [Feature & API Capability Checklist](#4-feature--api-capability-checklist)
 5. [Backend Implementation Roadmap](#5-backend-implementation-roadmap)
 6. [Open Decisions](#6-open-decisions)
+7. [Changelog](#7-changelog)
 
 ---
 
@@ -78,13 +79,13 @@ Voice or avatar interviews · coding-problem module · cross-domain "overall" in
 ### 2.2 Access hierarchy
 
 ```
-Admin            ── Only Admin Panel
+Admin            ── Admin panel + own account settings only
   └─ User (verified)  ── use both tracks, manage own profile and own data
        └─ User (unverified) ── verify email, resend OTP, nothing else
             └─ Guest        ── register, log in, reset password, health check
 ```
 
-> Higher roles inherit lower-role abilities **for their own account**. Admin status never grants access to another user's personal content (see §2.4).
+> **Admin does not inherit the user tracks.** Admin's home is the admin panel; an admin may also change their own account settings (name, avatar, password). Admin status never grants access to another user's personal content (see §2.4).
 
 ### 2.3 Permission matrix
 
@@ -92,13 +93,14 @@ Admin            ── Only Admin Panel
 | ------------------------------------------------- | :---: | :---------------: | :-------------: | :---: |
 | Register / log in / reset password                |  ✅   |        ✅         |       ✅        |  ✅   |
 | Verify email (OTP)                                |   —   |        ✅         |        —        |   —   |
-| View / edit own profile                           |  ❌   |        ❌         |       ✅        |  ✅   |
+| View / edit own profile (onboarding data)                           |  ❌   |        ❌         |       ✅        |  ❌   |
+| Change own name, avatar & password | ❌ | ❌ | ✅ | ✅ |
 | Connect GitHub, sync repos                        |  ❌   |        ❌         |       ✅        |  ❌   |
 | Create resume job (needs completed profile)       |  ❌   |        ❌         |       ✅        |  ❌   |
 | View / edit / export / delete own resume versions |  ❌   |        ❌         |       ✅        |  ❌   |
 | Start interview (needs completed profile)         |  ❌   |        ❌         |       ✅        |  ❌   |
 | View own interview history and reports            |  ❌   |        ❌         |       ✅        |  ❌   |
-| View own dashboard                                |  ❌   |        ❌         |       ✅        |  ✅   |
+| View own dashboard                                |  ❌   |        ❌         |       ✅        |  ❌   |
 | Create / edit / deactivate interview questions    |  ❌   |        ❌         |       ❌        |  ✅   |
 | List all questions (including answer key)         |  ❌   |        ❌         |       ❌        |  ✅   |
 | Suspend / reactivate accounts _(proposed, §6)_    |  ❌   |        ❌         |       ❌        |  ✅   |
@@ -144,7 +146,7 @@ Admin            ── Only Admin Panel
 | `AUTH-04` | A 6-digit OTP is emailed on registration. ⚙️ Valid **10 minutes**, **5 wrong attempts** then the code is dead and a new one is needed                                          |
 | `AUTH-05` | ⚙️ Resend cooldown **60 seconds**; maximum **5 OTPs per hour** per email                                                                                                       |
 | `AUTH-06` | Resending OTP must **not reveal** whether an email is registered (same response either way)                                                                                    |
-| `AUTH-07` | Registering with an email that already has a **verified** account → clear "already registered" error. With an **unverified** account → a fresh OTP is sent instead of an error |
+| `AUTH-07` | Registering with an email that already has a **verified** account → clear "already registered" error. With an **unverified** account → a fresh OTP is sent instead of an error _(Intentional UX trade-off: this reveals that the email is registered.)_ |
 | `AUTH-08` | Successful OTP confirmation activates the account **and signs the user in** (no second login step)                                                                             |
 | `AUTH-09` | Unverified users trying to log in are blocked and automatically sent a new OTP                                                                                                 |
 
@@ -216,11 +218,11 @@ Admin            ── Only Admin Panel
 
 | ID       | Rule                                                                                                                                                             |
 | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `RES-01` | Preconditions: verified email, completed profile, GitHub connected, repos synced                                                                                 |
+| `RES-01` | Preconditions: verified email, completed profile, GitHub connected, repos synced, and **at least 2 public repositories** available. With fewer than 2, resume creation is blocked with a clear message                                                                                 |
 | `RES-02` | The user chooses a mode: **Generic** (best-practice resume) or **JD-tailored** (needs a job description of ⚙️ 50–10,000 characters; title and company optional)  |
-| `RES-03` | The user selects **exactly 2** distinct projects they own, each with a **live URL** (http/https only)                                                            |
+| `RES-03` | The user selects **exactly 2** distinct projects they own, each with an **optional live URL** (http/https only). If a project has no live URL, its performance test is skipped, a warning is shown, and the resume is produced without performance numbers for that project                                                            |
 | `RES-04` | A user can have **only one active resume job** at a time (queued or running). A second request returns a conflict that points at the active job                  |
-| `RES-05` | ⚙️ Daily quota: **1 resume jobs per rolling 24 h** per user                                                                                                      |
+| `RES-05` | ⚙️ Daily quota: **1 resume job per rolling 24 h** per user. Only jobs that finish successfully count; jobs that fail or are cancelled do **not** use the quota                                                                                                      |
 | `RES-06` | Repeating the _same_ request with the same idempotency key returns the original job instead of creating a duplicate (protects against double-clicks and retries) |
 
 #### 3.4.2 The pipeline (what happens after the user submits)
@@ -235,7 +237,7 @@ Admin            ── Only Admin Panel
 | Stage                   | What must happen                                                                                      | If it goes wrong                                                                                                                    |
 | ----------------------- | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | **A. Project analysis** | Read README, folder structure and important files of both repos; build searchable knowledge from them | Repo deleted/private → job fails with `REPO_UNAVAILABLE`. Repo too empty to describe → fails with `INSUFFICIENT_REPO_DATA`          |
-| **B. Performance test** | Run a website audit on each live URL                                                                  | URL down, too slow, or blocked → **that test is skipped, the user is told, and the resume is still produced** without those numbers |
+| **B. Performance test** | Run a website audit on each live URL                                                                  | URL not provided, down, too slow, or blocked → **that test is skipped, the user is told, and the resume is still produced** without those numbers |
 | **C. JD analysis**      | Extract requirements, mark each _must-have_ or _nice-to-have_, match them to the project knowledge    | JD unusable → fall back to a clear error asking the user to edit the JD                                                             |
 | **D. Resume writing**   | AI writes structured resume content using **only** profile data, project knowledge and test results   | AI temporarily down → retry automatically (3 attempts), then fail with `AI_UNAVAILABLE`                                             |
 | **E. Verification**     | Check every bullet against the sources (see `RES-10`)                                                 | Unverifiable bullets are removed; too few left → job fails with a clear reason                                                      |
@@ -268,7 +270,7 @@ A and B run **in parallel**. Progress (0–100 %) and per-stage status are visib
 | `INT-01` | Preconditions: verified email and completed profile                                                                                            |
 | `INT-02` | The user picks a technology (defaults to their expertise). The technology must be active and have enough questions                             |
 | `INT-03` | **Session lock:** only **one in-progress session per user per technology**. A second start returns a conflict pointing at the existing session |
-| `INT-04` | ⚙️ Daily quota: **2 sessions per rolling 24 h** per user                                                                                       |
+| `INT-04` | ⚙️ Daily quota: **2 sessions per rolling 24 h** per user. A session counts from the moment it starts and keeps counting if it completes; a session that is **abandoned** (idle 24 h, `INT-14`) stops counting                                                                                       |
 | `INT-05` | Each session has **10 questions**, chosen as ⚙️ **3 easy / 4 medium / 3 hard**, covering as many different topics as possible                  |
 | `INT-06` | Questions the user saw in their **last 3 sessions** of the same technology are avoided when the bank is large enough                           |
 | `INT-07` | Each attempt gets a serial number per technology (attempt 1, 2, 3…) so progress can be compared                                                |
@@ -293,7 +295,7 @@ A and B run **in parallel**. Progress (0–100 %) and per-stage status are visib
 | `INT-16` | Each answer is scored 0–10 on **Correctness**, **Depth** and **Clarity**, compared with the question's expected key points                                                                                |
 | `INT-17` | Answer score (0–100) = Correctness × 50 % + Depth × 30 % + Clarity × 20 % _(⚙️ weights configurable)_                                                                                                     |
 | `INT-18` | **Expertise percentage** = average of all question scores in the session (skipped = 0), rounded to 1 decimal                                                                                              |
-| `INT-19` | Level bands ⚙️: **< 55** Beginner · **55–80** Intermediate · **80–90** Advanced · **90+** Expert                                                                                                          |
+| `INT-19` | Level bands ⚙️: **below 55** Beginner · **55–79.9** Intermediate · **80–89.9** Advanced · **90 and above** Expert (lower bound inclusive)                                                                                                          |
 | `INT-20` | If a few answers cannot be scored after repeated retries, the report is produced from the scored answers and clearly marked **partial**                                                                   |
 | `INT-21` | The **report** is available only when the session is complete. Asking earlier returns "not ready" with progress                                                                                           |
 | `INT-22` | Report contents: expertise %, level, average per dimension, per-question feedback (matched points, missing points), strongest/weakest topics, comparison with the previous attempt in the same technology |
@@ -312,7 +314,7 @@ IN_PROGRESS ──(all answered / early finish)──▶ EVALUATING ──(all s
 
 | ID        | Rule                                                                                                                                                                            |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DASH-01` | One summary view: latest 1 resume versions, latest 2 interview sessions, best expertise % per technology, any active resume job or interview session, and remaining daily quota |
+| `DASH-01` | One summary view: latest 1 resume version, latest 2 interview sessions, best expertise % per technology, any active resume job or interview session, and remaining daily quota |
 | `DASH-02` | The summary updates within ~1 minute of any change                                                                                                                              |
 
 ---
@@ -325,6 +327,7 @@ IN_PROGRESS ──(all answered / early finish)──▶ EVALUATING ──(all s
 | `ADM-02` | Deactivated questions are never used in new sessions but remain in the history of past sessions                                              |
 | `ADM-03` | A technology is offered to users only when it has enough active questions (⚙️ at least 10 per technology, with a spread across difficulties) |
 | `ADM-04` | After question content changes, the searchable index must be refreshed (an admin-triggered re-index is available)                            |
+| `ADM-05` | In the MVP the list of technologies is created by a server-side setup step; admins add questions to existing technologies only. Creating, renaming and activating technologies from the admin panel is Phase 1.5 |
 
 ---
 
@@ -381,13 +384,14 @@ Email delivery failures retry automatically and never block the main action.
 
 |  ☐  | Method | Route                           | Description                                                         | Allowed roles | Phase |
 | :-: | ------ | ------------------------------- | ------------------------------------------------------------------- | ------------- | :---: |
-|  ☐  | GET    | `/users/me`                     | Current account, profile, onboarding progress, GitHub status, quota | User          |   1   |
+|  ☐  | GET    | `/users/me`                     | Current account, profile, onboarding progress, GitHub status, quota (Admin: account basics only) | User, Admin |   1   |
+|  ☐  | PATCH  | `/users/me`                     | Update own display name (Admin: this is the only profile field) | User, Admin |   1   |
 |  ☐  | PUT    | `/users/me/profile/steps/:step` | Save onboarding step 1–4 (draft)                                    | User          |   1   |
 |  ☐  | PUT    | `/users/me/expertise`           | Set expertise technology                                            | User          |   1   |
 |  ☐  | POST   | `/users/me/profile/complete`    | Finish onboarding (validates required steps)                        | User          |   1   |
-|  ☐  | POST   | `/users/me/avatar/signature`    | Get permission to upload an avatar                                  | User          |   1   |
-|  ☐  | PUT    | `/users/me/avatar`              | Confirm uploaded avatar                                             | User          |   1   |
-|  ☐  | PATCH  | `/users/me/password`            | Change password                                                     | User          |   1   |
+|  ☐  | POST   | `/users/me/avatar/signature`    | Get permission to upload an avatar                                  | User, Admin |   1   |
+|  ☐  | PUT    | `/users/me/avatar`              | Confirm uploaded avatar                                             | User, Admin |   1   |
+|  ☐  | PATCH  | `/users/me/password`            | Change password                                                     | User, Admin |   1   |
 
 ### 4.3 GitHub
 
@@ -400,7 +404,7 @@ Email delivery failures retry automatically and never block the main action.
 
 |  ☐  | Method | Route                          | Description                                                    | Allowed roles | Phase |
 | :-: | ------ | ------------------------------ | -------------------------------------------------------------- | ------------- | :---: |
-|  ☐  | POST   | `/resumes/jobs`                | Start a resume job (mode, 2 projects + live URLs, optional JD) | User          |   1   |
+|  ☐  | POST   | `/resumes/jobs`                | Start a resume job (mode, 2 projects, optional live URLs, optional JD) | User          |   1   |
 |  ☐  | GET    | `/resumes/jobs/:jobId`         | Job status, stage progress, warnings, resulting version        | User          |   1   |
 |  ☐  | GET    | `/resumes/jobs/:jobId/events`  | Live progress stream                                           | User          |   1   |
 |  ☐  | POST   | `/resumes/jobs/:jobId/cancel`  | Cancel before writing stage                                    | User          |   1   |
@@ -437,6 +441,8 @@ Email delivery failures retry automatically and never block the main action.
 |  ☐  | GET    | `/admin/questions`         | List questions (with answer key)    | Admin         |   1   |
 |  ☐  | PATCH  | `/admin/questions/:id`     | Edit / deactivate a question        | Admin         |   1   |
 |  ☐  | POST   | `/admin/questions/reindex` | Refresh the question search index   | Admin         |   1   |
+|  ☐  | POST   | `/admin/technologies`      | Create a technology _(proposed)_ | Admin |  1.5  |
+|  ☐  | PATCH  | `/admin/technologies/:id`  | Rename / activate / deactivate _(proposed)_ | Admin |  1.5  |
 |  ☐  | GET    | `/admin/users`             | Search accounts _(proposed)_        | Admin         |  1.5  |
 |  ☐  | PATCH  | `/admin/users/:id/status`  | Suspend / reactivate _(proposed)_   | Admin         |  1.5  |
 |  ☐  | PATCH  | `/admin/users/:id/role`    | Promote / demote admin _(proposed)_ | Admin         |  1.5  |
@@ -549,7 +555,7 @@ Email delivery failures retry automatically and never block the main action.
 
 ### 5.7 Phase 1.5 — Admin Tools (after MVP, optional)
 
-Account search, suspend/reactivate (with session revocation and email), admin promotion/demotion with an audit trail. _Needs the decision in §6 first._
+Technology management (create/rename/activate), account search, suspend/reactivate (with session revocation and email), admin promotion/demotion with an audit trail. _Needs the decision in §6 first._
 
 ### 5.8 Phase 2 — Enhancement (v2.0)
 
@@ -577,14 +583,30 @@ Account search, suspend/reactivate (with session revocation and email), admin pr
 | D3  | **Admin privacy.** Can admins ever view user resumes/answers?                             | Never · Only with user consent for support                  | Never in MVP                                                                       | Before Phase 1D        |
 | D4  | **Forked repos.** Include forks in the repo list?                                         | Include (flagged) · Exclude                                 | Include, shown with a "fork" label                                                 | Before Phase 1A step 6 |
 | D5  | **Interview in any technology or only expertise?**                                        | Any active technology · Only the chosen expertise           | Any active technology (default = expertise)                                        | Before Phase 1C        |
-| D6  | **Quotas.** Are 5 resumes and 10 interviews per day right for the free demo?              | Keep · Adjust                                               | Keep until real AI cost is known                                                   | Before release         |
+| D6  | **Quotas.** Are 1 resume and 2 interviews per day right for the free demo?              | Keep · Adjust                                               | Keep until real AI cost is known                                                   | Before release         |
 | D7  | **Scoring weights and level bands.**                                                      | Keep defaults · Team calibrates after sample sessions       | Keep, then calibrate with 10–20 sample answers                                     | During Phase 1C        |
 | D8  | **AI provider** for writing and scoring                                                   | Claude · OpenAI · Gemini                                    | Team choice; keep it swappable behind one internal interface                       | Before Phase 1B        |
 
 ---
 
+## 7. Changelog
+
+| Version | Change |
+| ------- | ------ |
+| v1.1 | **Quota:** failed or cancelled resume jobs no longer use the daily quota (`RES-05`) |
+| v1.1 | **Admin scope:** Admin has no dashboard and no onboarding profile; may change own name, avatar and password only (§2.2, §2.3, §4.2) |
+| v1.1 | **Level bands** now have exact boundaries: <55 · 55–79.9 · 80–89.9 · 90+ (`INT-19`) |
+| v1.1 | **Live URL is optional** per project; missing URL means skipped test + warning (`RES-03`, §3.4.2-B) |
+| v1.1 | **At least 2 public repos** required before a resume can be created (`RES-01`) |
+| v1.1 | **Technologies** are seeded in MVP; admin technology management moved to Phase 1.5 (`ADM-05`, §4.7) |
+| v1.1 | `AUTH-07` email-reveal marked as an intentional trade-off; D6 text and `DASH-01` grammar corrected |
+| v1.2 | **Interview quota (`INT-04`):** abandoned sessions stop counting toward the daily limit |
+| v1.2 | **New endpoint** `PATCH /users/me` so Admin (and users) can change their own display name |
+
+---
+
 <div align="center">
 
-_DevFolio · Backend Requirements · v1.0 · derived from the Product Roadmap (Phase 1 MVP in full detail)_
+_DevFolio · Backend Requirements · v1.2 · derived from the Product Roadmap (Phase 1 MVP in full detail)_
 
 </div>
