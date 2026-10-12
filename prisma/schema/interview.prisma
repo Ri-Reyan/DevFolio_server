@@ -1,0 +1,95 @@
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum SessionStatus {
+  IN_PROGRESS
+  EVALUATING
+  COMPLETED
+  ABANDONED
+}
+
+enum EvalStatus {
+  PENDING
+  EVALUATED
+  FAILED
+}
+
+model Question {
+  id               String            @id @default(uuid()) @db.Uuid
+  technologyId     String            @db.Uuid
+  topic            String
+  difficulty       Difficulty
+  prompt           String
+  referencePoints  String[]
+  pineconeVectorId String?           // Pinecone vector ID
+  embeddingStatus  String            @default("QUEUED")
+  isActive         Boolean           @default(true)
+  createdById      String?           @db.Uuid
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  technology       Technology        @relation(fields: [technologyId], references: [id])
+  asked            SessionQuestion[]
+
+  @@index([technologyId, difficulty, isActive])
+}
+
+model InterviewSession {
+  id             String            @id @default(uuid()) @db.Uuid
+  profileId      String            @db.Uuid
+  technologyId   String            @db.Uuid
+  attemptNo      Int
+  status         SessionStatus     @default(IN_PROGRESS)
+  totalQuestions Int               @default(10)
+  answeredCount  Int               @default(0)
+  expertisePct   Decimal?          @db.Decimal(5, 2)
+  level          String?
+  partial        Boolean           @default(false)
+  idempotencyKey String?
+  startedAt      DateTime          @default(now())
+  lastActivityAt DateTime          @default(now())
+  finishedAt     DateTime?
+  profile        Profile           @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  technology     Technology        @relation(fields: [technologyId], references: [id])
+  questions      SessionQuestion[]
+
+  @@unique([profileId, technologyId, attemptNo])
+  @@unique([profileId, idempotencyKey])
+  @@index([profileId, startedAt])
+}
+
+model SessionQuestion {
+  id         String           @id @default(uuid()) @db.Uuid
+  sessionId  String           @db.Uuid
+  questionId String           @db.Uuid
+  orderIndex Int
+  askedAt    DateTime?
+  session    InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  question   Question         @relation(fields: [questionId], references: [id])
+  answer     Answer?
+
+  @@unique([sessionId, orderIndex])
+  @@unique([sessionId, questionId])
+}
+
+model Answer {
+  id                String          @id @default(uuid()) @db.Uuid
+  sessionQuestionId String          @unique @db.Uuid
+  text              String?
+  skipped           Boolean         @default(false)
+  submittedAt       DateTime        @default(now())
+  evalStatus        EvalStatus      @default(PENDING)
+  correctness       Int?
+  depth             Int?
+  clarity           Int?
+  score             Decimal?        @db.Decimal(5, 2)
+  feedback          String?
+  matchedPoints     String[]        @default([])
+  missingPoints     String[]        @default([])
+  modelName         String?
+  evalAttempts      Int             @default(0)
+  evaluatedAt       DateTime?
+  sessionQuestion   SessionQuestion @relation(fields: [sessionQuestionId], references: [id], onDelete: Cascade)
+}

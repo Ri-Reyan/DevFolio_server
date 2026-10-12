@@ -1,0 +1,85 @@
+enum ResumeMode {
+  GENERIC
+  JD_TAILORED
+}
+
+enum ResumeJobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+model JobPost {
+  id           String      @id @default(uuid()) @db.Uuid
+  profileId    String      @db.Uuid
+  title        String?
+  company      String?
+  rawText      String
+  requirements Json?
+  createdAt    DateTime    @default(now())
+  profile      Profile     @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  jobs         ResumeJob[]
+
+  @@index([profileId])
+}
+
+model ResumeJob {
+  id                String             @id @default(uuid()) @db.Uuid
+  profileId         String             @db.Uuid
+  mode              ResumeMode
+  jobPostId         String?            @db.Uuid
+  status            ResumeJobStatus    @default(QUEUED)
+  progress          Int                @default(0)
+  stages            Json               @default("{}")
+  warnings          Json               @default("[]")
+  errorCode         String?
+  errorMessage      String?
+  idempotencyKey    String?
+  cancelRequestedAt DateTime?
+  createdAt         DateTime           @default(now())
+  startedAt         DateTime?
+  finishedAt        DateTime?
+  profile           Profile            @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  jobPost           JobPost?           @relation(fields: [jobPostId], references: [id])
+  projects          ResumeJobProject[]
+  version           ResumeVersion?
+
+  @@unique([profileId, idempotencyKey])
+  @@index([profileId, createdAt])
+}
+
+model ResumeJobProject {
+  id        String    @id @default(uuid()) @db.Uuid
+  jobId     String    @db.Uuid
+  projectId String    @db.Uuid
+  liveUrl   String?
+  position  Int
+  job       ResumeJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  project   Project   @relation(fields: [projectId], references: [id])
+
+  @@unique([jobId, projectId])
+}
+
+model ResumeVersion {
+  id          String    @id @default(uuid()) @db.Uuid
+  profileId   String    @db.Uuid
+  jobId       String    @unique @db.Uuid
+  versionNo   Int
+  title       String
+  content     Json
+  matchScore  Int?
+  gapReport   Json?
+  contentHash String
+  pdfUrl      String?
+  pdfPublicId String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  profile     Profile   @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  job         ResumeJob @relation(fields: [jobId], references: [id])
+
+  @@unique([profileId, versionNo])
+  @@index([profileId, createdAt])
+}

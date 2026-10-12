@@ -240,52 +240,62 @@ skillproof-ai/
 ### 4.1 Entity-Relationship Diagram (ASCII)
 
 ```
-                               ┌─────────────┐
-                               │ Technology  │──────────────┐
-                               └──────┬──────┘              │ 1
-                                      │ 1                   │
-                                      │                     ▼ *
-┌────────────────┐ 1     1 ┌──────────┴──┐ *          ┌───────────┐
-│ GithubAccount  │─────────│    User     │───────────▶│ Question  │ (embedding vector)
-└────────────────┘         └──┬──┬──┬──┬─┘            └─────┬─────┘
-                              │  │  │  │                    │ 1
-   ┌──────────────────────────┘  │  │  └──────────────┐     │
-   │ 1        1                  │  │                 │     │ *
-┌──▼─────┐  ┌───────────┐        │  │         ┌───────▼─────┴───┐ 1    * ┌────────────────┐ 1   0..1 ┌────────┐
-│Profile │  │ Experience│ *      │  │         │ InterviewSession│────────│SessionQuestion │─────────│ Answer │
-│        │  │ Education │        │  │         └─────────────────┘        └────────────────┘         └────────┘
-│        │  │ Language  │        │  │
-└────────┘  └───────────┘        │  │ *
-                                 │  └──────────────┐
-                           * ┌───▼────┐ 1        *  ▼
- ┌────────────────┐ *    1   │Project │───────▶ ┌──────────────┐
- │ProjectChunk    │──────────│        │         │PerformanceRpt│
- │(embedding)     │          └───┬────┘         └──────────────┘
- └────────────────┘              │ *
-                                 │
-                        ┌────────▼───────────┐ *      1 ┌───────────┐
-                        │ ResumeJobProject   │──────────│ ResumeJob │───0..1──▶ ResumeVersion
-                        └────────────────────┘          └─────┬─────┘
-                                                              │ *    0..1
-                                                              ▼
-                                                          ┌─────────┐
-                                                          │ JobPost │
-                                                          └─────────┘
-  Auth support tables: OtpCode, PasswordResetToken, RefreshToken  (all  * — 1  User)
+                                ┌─────────────┐
+                                │ Technology  │──────────────┐
+                                └──────┬──────┘              │ 1
+                                       │ 1                   │
+                                       │                     ▼ *
+ ┌──────────────┐ 1          1 ┌───────┴──────┐ 1       * ┌───────────┐
+ │     User     │──────────────│   Profile    │──────────▶│ Question  │──▶ [Pinecone Vector ID]
+ └──────────────┘              └───┬──┬──┬──┬─┘           └─────┬─────┘
+   │ 1                             │  │  │  │                   │ 1
+   │                               │  │  │  │                   ▼ *
+   ▼ *                             │  │  │  │             ┌────────────────┐ 1   0..1 ┌────────┐
+ ┌────────────────────┐            │  │  │  │             │SessionQuestion │─────────│ Answer │
+ │ PasswordResetToken │            │  │  │  │             └────────────────┘         └────────┘
+ └────────────────────┘            │  │  │  │
+    (Auth / Identity)              │  │  │  └─────────────────────────────────┐
+                                   │  │  │                                    │ 1
+                                   │  │  │ *                                  ▼ *
+    ┌──────────────────────────────┘  │  └──────────────┐             ┌──────────────────┐
+    │ 1                               │                 │             │ InterviewSession │
+ ┌──▼──────────────┐            ┌─────▼───────┐   ┌─────▼───────┐     └──────────────────┘
+ │  GithubAccount  │            │ Experience  │   │   JobPost   │
+ └─────────────────┘            │ Education   │   └─────┬───────┘
+                                │ Language    │         │ 1
+                                └─────────────┘         │
+                                                        ▼ *
+ ┌──────────────────────┐ 1           * ┌───────────┐ 1 ┌───────────┐
+ │ Profile Embedding    │◀──────────────│  Project  │◀──│ ResumeJob │───0..1──▶ ResumeVersion
+ │ [Pinecone Vector ID] │               └─────┬─────┘   └─────┬─────┘
+ └──────────────────────┘                     │ 1             │ 1
+                                              ▼ *             ▼ *
+                                       ┌──────────────┐ ┌───────────────┐
+                                       │ ProjectChunk │ │ResumeJobProj  │
+                                       │ (Pinecone ID)│ └───────────────┘
+                                       └──────────────┘
+                                              │ 1
+                                              ▼ *
+                                       ┌──────────────┐
+                                       │PerformanceRpt│
+                                       └──────────────┘
+
+  External Storage & Caches:
+    - Pinecone: Vector index for semantic embeddings (Profile, ProjectChunk, Question)
+    - Redis: Ephemeral auth state (OTP codes: otp:{email}, 10 min TTL, attempt counters) — No DB table
+    - PostgreSQL: Relational source of truth
 ```
 
 ### 4.2 Prisma schema (`packages/db/prisma/schema.prisma`)
 
 ```prisma
 generator client {
-  provider        = "prisma-client-js"
-  previewFeatures = ["postgresqlExtensions"]
+  provider = "prisma-client-js"
 }
 
 datasource db {
-  provider   = "postgresql"
-  url        = env("DATABASE_URL")
-  extensions = [vector]
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 // ───────────── Enums ─────────────
@@ -293,7 +303,6 @@ enum Role            { USER ADMIN }
 enum UserStatus      { PENDING_VERIFICATION ACTIVE SUSPENDED }
 enum Gender          { MALE FEMALE OTHER PREFER_NOT_TO_SAY }
 enum LanguageLevel   { BASIC CONVERSATIONAL FLUENT NATIVE }
-enum OtpPurpose      { EMAIL_VERIFY }
 enum ChunkSource     { README FILE_TREE KEY_FILE DEPENDENCY_MANIFEST }
 enum PerfStatus      { PENDING RUNNING COMPLETED SKIPPED FAILED }
 enum ResumeMode      { GENERIC JD_TAILORED }
@@ -302,51 +311,29 @@ enum Difficulty      { EASY MEDIUM HARD }
 enum SessionStatus   { IN_PROGRESS EVALUATING COMPLETED ABANDONED }
 enum EvalStatus      { PENDING EVALUATED FAILED }
 
+// Note: OTP verification codes are ephemeral and stored in Redis (key: otp:{email}) with a 10 min TTL.
+// No PostgreSQL table is used for OTP verification.
+
 // ───────────── Identity & auth ─────────────
 model User {
-  id               String     @id @default(uuid()) @db.Uuid
-  email            String     @unique                       // stored lower-cased, max 254
-  passwordHash     String?                                  // argon2id; null for GitHub-only accounts
-  role             Role       @default(USER)
-  status           UserStatus @default(PENDING_VERIFICATION)
+  id               String               @id @default(uuid()) @db.Uuid
+  email            String               @unique                       // stored lower-cased, max 254
+  passwordHash     String?                                            // argon2id; null for GitHub-only accounts
+  role             Role                 @default(USER)
+  status           UserStatus           @default(PENDING_VERIFICATION)
   emailVerifiedAt  DateTime?
-  failedLoginCount Int        @default(0)
+  failedLoginCount Int                  @default(0)
   lockedUntil      DateTime?
   avatarUrl        String?
-  avatarPublicId   String?                                  // Cloudinary public_id
+  avatarPublicId   String?                                            // Cloudinary public_id
   lastLoginAt      DateTime?
-  createdAt        DateTime   @default(now())
-  updatedAt        DateTime   @updatedAt
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
 
   profile          Profile?
-  githubAccount    GithubAccount?
-  experiences      Experience[]
-  educations       Education[]
-  languages        Language[]
-  projects         Project[]
-  jobPosts         JobPost[]
-  resumeJobs       ResumeJob[]
-  resumeVersions   ResumeVersion[]
-  sessions         InterviewSession[]
-  otpCodes         OtpCode[]
   resetTokens      PasswordResetToken[]
-  refreshTokens    RefreshToken[]
 
   @@index([status])
-}
-
-model OtpCode {
-  id         String     @id @default(uuid()) @db.Uuid
-  userId     String     @db.Uuid
-  purpose    OtpPurpose
-  codeHash   String                                         // HMAC-SHA256(otp, OTP_PEPPER)
-  attempts   Int        @default(0)                         // max 5
-  expiresAt  DateTime                                       // now + 10 min
-  consumedAt DateTime?
-  createdAt  DateTime   @default(now())
-  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId, purpose, createdAt])
 }
 
 model PasswordResetToken {
@@ -361,69 +348,64 @@ model PasswordResetToken {
   @@index([userId])
 }
 
-model RefreshToken {
-  id           String    @id @default(uuid()) @db.Uuid
-  userId       String    @db.Uuid
-  familyId     String    @db.Uuid                           // one login = one family
-  tokenHash    String    @unique                            // sha256(opaque token)
-  expiresAt    DateTime                                     // now + 7 days
-  revokedAt    DateTime?
-  replacedById String?   @db.Uuid                           // rotation chain
-  userAgent    String?
-  ip           String?
-  createdAt    DateTime  @default(now())
-  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+// ───────────── Profile & domain models ─────────────
+model Profile {
+  id                    String              @id @default(uuid()) @db.Uuid
+  userId                String              @unique @db.Uuid
+  fullName              String?                                         // 2–80 chars
+  age                   Int?                                            // 13–100
+  gender                Gender?
+  country               String?                                         // ISO-3166 alpha-2, e.g. "BD"
+  skills                String[]            @default([])                 // 1–30 items
+  expertiseTechnologyId String?             @db.Uuid
+  onboardingStep        Int                 @default(1)                  // highest unlocked step (1–4)
+  completedSteps        Int[]               @default([])
+  onboardingCompletedAt DateTime?
+  pineconeVectorId      String?                                         // Reference to aggregate profile embedding in Pinecone (skills, technologies, experiences, languages)
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
 
-  @@index([userId])
-  @@index([familyId])
+  user                  User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expertiseTechnology   Technology?         @relation(fields: [expertiseTechnologyId], references: [id])
+  githubAccount         GithubAccount?
+  experiences           Experience[]
+  educations            Education[]
+  languages             Language[]
+  projects              Project[]
+  projectChunks         ProjectChunk[]
+  jobPosts              JobPost[]
+  resumeJobs            ResumeJob[]
+  resumeVersions        ResumeVersion[]
+  sessions              InterviewSession[]
 }
 
 model GithubAccount {
-  id             String   @id @default(uuid()) @db.Uuid
-  userId         String   @unique @db.Uuid
-  githubId       BigInt   @unique
+  id             String    @id @default(uuid()) @db.Uuid
+  profileId      String    @unique @db.Uuid
+  githubId       BigInt    @unique
   login          String
-  accessTokenEnc String                                     // "v1:<iv>:<tag>:<ciphertext>" AES-256-GCM
-  scopes         String[] @default([])
+  accessTokenEnc String                                       // "v1:<iv>:<tag>:<ciphertext>" AES-256-GCM
+  scopes         String[]  @default([])
   lastSyncedAt   DateTime?
-  syncStatus     String   @default("IDLE")                  // IDLE | QUEUED | RUNNING | DONE | FAILED
-  connectedAt    DateTime @default(now())
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  syncStatus     String    @default("IDLE")                   // IDLE | QUEUED | RUNNING | DONE | FAILED
+  connectedAt    DateTime  @default(now())
+  profile        Profile   @relation(fields: [profileId], references: [id], onDelete: Cascade)
 }
 
-// ───────────── Profile & onboarding ─────────────
 model Technology {
-  id        String     @id @default(uuid()) @db.Uuid
-  slug      String     @unique                              // "react", "nodejs", "machine-learning"
+  id        String             @id @default(uuid()) @db.Uuid
+  slug      String             @unique                              // "react", "nodejs", "machine-learning"
   name      String
-  isActive  Boolean    @default(true)
-  createdAt DateTime   @default(now())
+  isActive  Boolean            @default(true)
+  createdAt DateTime           @default(now())
   questions Question[]
   sessions  InterviewSession[]
   profiles  Profile[]
 }
 
-model Profile {
-  id                    String      @id @default(uuid()) @db.Uuid
-  userId                String      @unique @db.Uuid
-  fullName              String?                             // 2–80 chars
-  age                   Int?                                // 13–100
-  gender                Gender?
-  country               String?                             // ISO-3166 alpha-2, e.g. "BD"
-  skills                String[]    @default([])            // 1–30 items
-  expertiseTechnologyId String?     @db.Uuid
-  onboardingStep        Int         @default(1)             // highest unlocked step (1–4)
-  completedSteps        Int[]       @default([])
-  onboardingCompletedAt DateTime?
-  createdAt             DateTime    @default(now())
-  updatedAt             DateTime    @updatedAt
-  user                  User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  expertiseTechnology   Technology? @relation(fields: [expertiseTechnologyId], references: [id])
-}
-
 model Experience {
   id          String    @id @default(uuid()) @db.Uuid
-  userId      String    @db.Uuid
+  profileId   String    @db.Uuid
   company     String
   title       String
   location    String?
@@ -431,36 +413,39 @@ model Experience {
   endDate     DateTime? @db.Date
   isCurrent   Boolean   @default(false)
   description String?                                        // ≤ 1500 chars
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  @@index([userId])
+  profile     Profile   @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId])
 }
 
 model Education {
   id          String  @id @default(uuid()) @db.Uuid
-  userId      String  @db.Uuid
+  profileId   String  @db.Uuid
   institution String
   degree      String
   field       String?
   startYear   Int
   endYear     Int?
   grade       String?
-  user        User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  @@index([userId])
+  profile     Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId])
 }
 
 model Language {
-  id     String        @id @default(uuid()) @db.Uuid
-  userId String        @db.Uuid
-  name   String
-  level  LanguageLevel
-  user   User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  @@unique([userId, name])
+  id        String        @id @default(uuid()) @db.Uuid
+  profileId String        @db.Uuid
+  name      String
+  level     LanguageLevel
+  profile   Profile       @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, name])
 }
 
 // ───────────── Resume track ─────────────
 model Project {
-  id            String    @id @default(uuid()) @db.Uuid
-  userId        String    @db.Uuid
+  id            String              @id @default(uuid()) @db.Uuid
+  profileId     String              @db.Uuid
   githubRepoId  BigInt
   name          String
   fullName      String                                       // "owner/repo"
@@ -468,38 +453,37 @@ model Project {
   htmlUrl       String
   defaultBranch String
   language      String?
-  topics        String[]  @default([])
-  isFork        Boolean   @default(false)
-  isArchived    Boolean   @default(false)
-  stars         Int       @default(0)
+  topics        String[]            @default([])
+  isFork        Boolean             @default(false)
+  isArchived    Boolean             @default(false)
+  stars         Int                 @default(0)
   pushedAt      DateTime?
-  syncedAt      DateTime  @default(now())
-  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  syncedAt      DateTime            @default(now())
+  profile       Profile             @relation(fields: [profileId], references: [id], onDelete: Cascade)
   chunks        ProjectChunk[]
   perfReports   PerformanceReport[]
   jobLinks      ResumeJobProject[]
 
-  @@unique([userId, githubRepoId])
-  @@index([userId, pushedAt])
+  @@unique([profileId, githubRepoId])
+  @@index([profileId, pushedAt])
 }
 
 model ProjectChunk {
-  id         String                       @id @default(uuid()) @db.Uuid
-  projectId  String                       @db.Uuid
-  userId     String                       @db.Uuid           // mandatory tenant filter on every vector query
-  source     ChunkSource
-  section    String?                                          // README heading / file path
-  content    String                                           // ≤ 1200 chars
-  tokenCount Int
-  embedding  Unsupported("vector(1536)")?                     // dimension MUST match EMBEDDING_DIM
-  commitSha  String?                                          // ingest snapshot
-  createdAt  DateTime                     @default(now())
-  project    Project                      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  id               String      @id @default(uuid()) @db.Uuid
+  projectId        String      @db.Uuid
+  profileId        String      @db.Uuid                      // mandatory tenant filter on vector query
+  source           ChunkSource
+  section          String?                                   // README heading / file path
+  content          String                                    // ≤ 1200 chars
+  tokenCount       Int
+  pineconeVectorId String?                                   // Reference ID to vector in Pinecone ({profileId}#{chunkId})
+  commitSha        String?                                   // ingest snapshot
+  createdAt        DateTime    @default(now())
+  project          Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  profile          Profile     @relation(fields: [profileId], references: [id], onDelete: Cascade)
 
-  @@index([userId, projectId])
+  @@index([profileId, projectId])
 }
-// raw SQL migration:
-//   CREATE INDEX project_chunk_embedding_hnsw ON "ProjectChunk" USING hnsw (embedding vector_cosine_ops);
 
 model PerformanceReport {
   id            String     @id @default(uuid()) @db.Uuid
@@ -518,127 +502,130 @@ model PerformanceReport {
   finishedAt    DateTime?
   createdAt     DateTime   @default(now())
   project       Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
   @@index([projectId, createdAt])
 }
 
 model JobPost {
   id           String      @id @default(uuid()) @db.Uuid
-  userId       String      @db.Uuid
+  profileId    String      @db.Uuid
   title        String?
   company      String?
   rawText      String                                         // 50–10000 chars
   requirements Json?                                          // [{id,text,importance:"MUST"|"NICE"}]
   createdAt    DateTime    @default(now())
-  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  profile      Profile     @relation(fields: [profileId], references: [id], onDelete: Cascade)
   jobs         ResumeJob[]
-  @@index([userId])
+
+  @@index([profileId])
 }
 
 model ResumeJob {
-  id              String          @id @default(uuid()) @db.Uuid
-  userId          String          @db.Uuid
-  mode            ResumeMode
-  jobPostId       String?         @db.Uuid
-  status          ResumeJobStatus @default(QUEUED)
-  progress        Int             @default(0)                 // 0–100
-  stages          Json            @default("{}")              // {projects,performance,jd,generate,validate} each {state,progress}
-  warnings        Json            @default("[]")              // [{code,projectId?,message}]
-  errorCode       String?
-  errorMessage    String?
-  idempotencyKey  String?
+  id                String             @id @default(uuid()) @db.Uuid
+  profileId         String             @db.Uuid
+  mode              ResumeMode
+  jobPostId         String?            @db.Uuid
+  status            ResumeJobStatus    @default(QUEUED)
+  progress          Int                @default(0)                 // 0–100
+  stages            Json               @default("{}")              // {projects,performance,jd,generate,validate} each {state,progress}
+  warnings          Json               @default("[]")              // [{code,projectId?,message}]
+  errorCode         String?
+  errorMessage      String?
+  idempotencyKey    String?
   cancelRequestedAt DateTime?
-  createdAt       DateTime        @default(now())
-  startedAt       DateTime?
-  finishedAt      DateTime?
-  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  jobPost         JobPost?        @relation(fields: [jobPostId], references: [id])
-  projects        ResumeJobProject[]
-  version         ResumeVersion?
+  createdAt         DateTime           @default(now())
+  startedAt         DateTime?
+  finishedAt        DateTime?
+  profile           Profile            @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  jobPost           JobPost?           @relation(fields: [jobPostId], references: [id])
+  projects          ResumeJobProject[]
+  version           ResumeVersion?
 
-  @@unique([userId, idempotencyKey])
-  @@index([userId, createdAt])
+  @@unique([profileId, idempotencyKey])
+  @@index([profileId, createdAt])
 }
-// raw SQL migration (one active job per user):
-//   CREATE UNIQUE INDEX one_active_resume_job ON "ResumeJob"("userId") WHERE status IN ('QUEUED','RUNNING');
+// raw SQL migration (one active job per profile):
+//   CREATE UNIQUE INDEX one_active_resume_job ON "ResumeJob"("profileId") WHERE status IN ('QUEUED','RUNNING');
 
 model ResumeJobProject {
-  id        String  @id @default(uuid()) @db.Uuid
-  jobId     String  @db.Uuid
-  projectId String  @db.Uuid
+  id        String    @id @default(uuid()) @db.Uuid
+  jobId     String    @db.Uuid
+  projectId String    @db.Uuid
   liveUrl   String?                                         // optional (RES-03)
   position  Int                                               // 1 or 2
   job       ResumeJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
   project   Project   @relation(fields: [projectId], references: [id])
+
   @@unique([jobId, projectId])
 }
 
 model ResumeVersion {
-  id           String    @id @default(uuid()) @db.Uuid
-  userId       String    @db.Uuid
-  jobId        String    @unique @db.Uuid
-  versionNo    Int                                            // per-user serial: 1,2,3…
-  title        String                                         // default "Resume v{n}" / "Resume — {company}"
-  content      Json                                           // see §6.3 structured schema
-  matchScore   Int?                                           // 0–100, JD mode only
-  gapReport    Json?                                          // unmet requirements
-  contentHash  String                                         // sha256(content) → PDF cache key
-  pdfUrl       String?
-  pdfPublicId  String?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  deletedAt    DateTime?                                      // soft delete
-  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  job          ResumeJob @relation(fields: [jobId], references: [id])
+  id          String    @id @default(uuid()) @db.Uuid
+  profileId   String    @db.Uuid
+  jobId       String    @unique @db.Uuid
+  versionNo   Int                                            // per-profile serial: 1,2,3…
+  title       String                                         // default "Resume v{n}" / "Resume — {company}"
+  content     Json                                           // see §6.3 structured schema
+  matchScore  Int?                                           // 0–100, JD mode only
+  gapReport   Json?                                          // unmet requirements
+  contentHash String                                         // sha256(content) → PDF cache key
+  pdfUrl      String?
+  pdfPublicId String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?                                      // soft delete
+  profile     Profile   @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  job         ResumeJob @relation(fields: [jobId], references: [id])
 
-  @@unique([userId, versionNo])
-  @@index([userId, createdAt])
+  @@unique([profileId, versionNo])
+  @@index([profileId, createdAt])
 }
 
 // ───────────── Interview track ─────────────
 model Question {
-  id              String      @id @default(uuid()) @db.Uuid
-  technologyId    String      @db.Uuid
-  topic           String                                      // "hooks", "closures", "indexes"…
-  difficulty      Difficulty
-  prompt          String                                      // 20–1000 chars
-  referencePoints String[]                                    // 2–8 key points a strong answer covers (never sent to client)
-  embedding       Unsupported("vector(1536)")?
-  embeddingStatus String      @default("QUEUED")           // QUEUED | READY | FAILED (question excluded from sessions unless READY)
-  isActive        Boolean     @default(true)
-  createdById     String?     @db.Uuid
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
-  technology      Technology  @relation(fields: [technologyId], references: [id])
-  asked           SessionQuestion[]
+  id               String            @id @default(uuid()) @db.Uuid
+  technologyId     String            @db.Uuid
+  topic            String                                      // "hooks", "closures", "indexes"…
+  difficulty       Difficulty
+  prompt           String                                      // 20–1000 chars
+  referencePoints  String[]                                    // 2–8 key points a strong answer covers (never sent to client)
+  pineconeVectorId String?                                     // Reference to question embedding stored in Pinecone
+  embeddingStatus  String            @default("QUEUED")        // QUEUED | READY | FAILED (question excluded from sessions unless READY)
+  isActive         Boolean           @default(true)
+  createdById      String?           @db.Uuid
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  technology       Technology        @relation(fields: [technologyId], references: [id])
+  asked            SessionQuestion[]
 
   @@index([technologyId, difficulty, isActive])
 }
 
 model InterviewSession {
-  id             String        @id @default(uuid()) @db.Uuid
-  userId         String        @db.Uuid
-  technologyId   String        @db.Uuid
-  attemptNo      Int                                          // serial per (user, technology)
-  status         SessionStatus @default(IN_PROGRESS)
-  totalQuestions Int           @default(10)
-  answeredCount  Int           @default(0)
-  expertisePct   Decimal?      @db.Decimal(5, 2)              // 0.00–100.00
+  id             String            @id @default(uuid()) @db.Uuid
+  profileId      String            @db.Uuid
+  technologyId   String            @db.Uuid
+  attemptNo      Int                                          // serial per (profile, technology)
+  status         SessionStatus     @default(IN_PROGRESS)
+  totalQuestions Int               @default(10)
+  answeredCount  Int               @default(0)
+  expertisePct   Decimal?          @db.Decimal(5, 2)          // 0.00–100.00
   level          String?                                      // BEGINNER | INTERMEDIATE | ADVANCED | EXPERT
-  partial        Boolean       @default(false)                // true if some answers failed evaluation
+  partial        Boolean           @default(false)            // true if some answers failed evaluation
   idempotencyKey String?
-  startedAt      DateTime      @default(now())
-  lastActivityAt DateTime      @default(now())
+  startedAt      DateTime          @default(now())
+  lastActivityAt DateTime          @default(now())
   finishedAt     DateTime?
-  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  technology     Technology    @relation(fields: [technologyId], references: [id])
+  profile        Profile           @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  technology     Technology        @relation(fields: [technologyId], references: [id])
   questions      SessionQuestion[]
 
-  @@unique([userId, technologyId, attemptNo])
-  @@unique([userId, idempotencyKey])
-  @@index([userId, startedAt])
+  @@unique([profileId, technologyId, attemptNo])
+  @@unique([profileId, idempotencyKey])
+  @@index([profileId, startedAt])
 }
 // raw SQL migration (session lock):
-//   CREATE UNIQUE INDEX one_active_session ON "InterviewSession"("userId","technologyId") WHERE status = 'IN_PROGRESS';
+//   CREATE UNIQUE INDEX one_active_session ON "InterviewSession"("profileId","technologyId") WHERE status = 'IN_PROGRESS';
 
 model SessionQuestion {
   id         String           @id @default(uuid()) @db.Uuid
@@ -677,15 +664,17 @@ model Answer {
 
 ### 4.3 Key constraints summary
 
-| Rule                                               | Enforcement                                                                                                                                                                                          |
-| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| One active resume job per user                     | Partial unique index `one_active_resume_job`                                                                                                                                                         |
-| One active interview session per user + technology | Partial unique index `one_active_session`                                                                                                                                                            |
-| Max 2 projects per resume job                      | Zod (`length === 2`) + `ResumeJobProject.position ∈ {1,2}`                                                                                                                                           |
-| Tenant isolation for vector search                 | `userId` filter is **mandatory** in every `ProjectChunk` query (repository layer refuses queries without it)                                                                                         |
-| `Question.referencePoints` secrecy                 | Never selected in any non-admin query (Prisma `select` whitelist)                                                                                                                                    |
-| Soft delete                                        | `ResumeVersion.deletedAt`; all list/get queries filter `deletedAt IS NULL`                                                                                                                           |
-| Daily quotas                                       | Never stored as a counter of truth. Resume = count of `COMPLETED` jobs with `finishedAt` in the last 24 h; Interview = count of sessions with `startedAt` in the last 24 h and `status <> ABANDONED` |
+| Rule | Enforcement |
+| --- | --- |
+| One active resume job per profile | Partial unique index `one_active_resume_job` on `ResumeJob("profileId")` |
+| One active interview session per profile + technology | Partial unique index `one_active_session` on `InterviewSession("profileId", "technologyId")` |
+| Max 2 projects per resume job | Zod (`length === 2`) + `ResumeJobProject.position ∈ {1,2}` |
+| Tenant isolation for vector search | `profileId` metadata filter is **mandatory** in every Pinecone vector query (repository layer refuses queries without it) |
+| Ephemeral OTP verification (Redis) | Managed in Redis (`otp:{email}`) with 10 min TTL and max 5 attempts; no PostgreSQL table |
+| Pinecone vector reference | Vectors stored in Pinecone index; referenced in DB via `pineconeVectorId` in `Profile` (aggregate embedding), `ProjectChunk`, and `Question` |
+| `Question.referencePoints` secrecy | Never selected in any non-admin query (Prisma `select` whitelist) |
+| Soft delete | `ResumeVersion.deletedAt`; all list/get queries filter `deletedAt IS NULL` |
+| Daily quotas | Never stored as a counter of truth. Resume = count of `COMPLETED` jobs for `profileId` with `finishedAt` in last 24 h; Interview = count of sessions for `profileId` with `startedAt` in last 24 h and `status <> ABANDONED` |
 
 ---
 
@@ -724,23 +713,23 @@ stateDiagram-v2
 ### 5.3 OTP flow (email verification)
 
 ```
-Client                         API                              Redis / DB                     Worker
+Client                         API                              Redis                          Worker
   │  POST /auth/register        │                                   │                              │
   │ ───────────────────────────▶│ validate · normalise email        │                              │
   │                             │ create User(PENDING) or reuse     │                              │
   │                             │ unverified one (AUTH-07)          │                              │
   │                             │ otp = randomInt(0..999999) padded │                              │
-  │                             │ store HMAC(otp, OTP_PEPPER)  ────▶│ OtpCode row, ttl 10 min      │
+  │                             │ store HMAC(otp, OTP_PEPPER)  ────▶│ key otp:{email}, ttl 10 min  │
   │                             │ cooldown key set (60 s)      ────▶│ otp:cooldown:{email}         │
   │                             │ enqueue email(OTP)  ──────────────────────────────────────────▶ │ send
   │ ◀──────── 201 ──────────────│                                   │                              │
   │  POST /auth/verify-otp      │                                   │                              │
-  │ ───────────────────────────▶│ load latest unconsumed OtpCode    │                              │
-  │                             │ expired? → OTP_EXPIRED            │                              │
+  │ ───────────────────────────▶│ load Redis otp:{email}            │                              │
+  │                             │ expired/missing? → OTP_EXPIRED    │                              │
   │                             │ attempts ≥ 5? → OTP_ATTEMPTS_EXCEEDED                            │
   │                             │ constant-time compare HMAC        │                              │
   │                             │ wrong → attempts+1 → INVALID_OTP(attemptsLeft)                   │
-  │                             │ right → consume, status=ACTIVE, emailVerifiedAt=now              │
+  │                             │ right → DEL key, status=ACTIVE, emailVerifiedAt=now              │
   │                             │ issue access + refresh (AUTH-08)  │                              │
   │ ◀── 200 + Set-Cookie rt ────│                                   │                              │
 ```
@@ -749,8 +738,8 @@ Client                         API                              Redis / DB      
 | -------------------------------- | ------------------------------------------------------- | --------------------------------------------------------- |
 | Length / alphabet                | 6 digits, `crypto.randomInt`                            | CSPRNG, zero-padded                                       |
 | Stored as                        | `HMAC-SHA256(otp, OTP_PEPPER)`                          | OTP is never stored in plain text                         |
-| Lifetime                         | 10 min ⚙️ `OTP_TTL_SEC`                                 | `expiresAt`                                               |
-| Wrong attempts                   | 5 ⚙️ `OTP_MAX_ATTEMPTS`                                 | `OtpCode.attempts`; at 5 the code is dead                 |
+| Lifetime                         | 10 min ⚙️ `OTP_TTL_SEC`                                 | Redis key TTL (`EXPIRE 600`)                              |
+| Wrong attempts                   | 5 ⚙️ `OTP_MAX_ATTEMPTS`                                 | Redis `attempts` field; at 5 the key is evicted           |
 | Resend cooldown                  | 60 s ⚙️                                                 | Redis key TTL; 429 `RESEND_COOLDOWN` with `retryAfterSec` |
 | Resend cap                       | 5 per hour per e-mail ⚙️                                | Redis counter; 429 `OTP_HOURLY_LIMIT`                     |
 | New OTP issued                   | All older unconsumed OTPs for that user are invalidated | Prevents parallel valid codes                             |

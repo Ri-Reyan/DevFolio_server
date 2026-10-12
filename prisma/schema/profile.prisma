@@ -1,0 +1,106 @@
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+  PREFER_NOT_TO_SAY
+}
+
+enum LanguageLevel {
+  BASIC
+  CONVERSATIONAL
+  FLUENT
+  NATIVE
+}
+
+model Profile {
+  id                    String              @id @default(uuid()) @db.Uuid
+  userId                String              @unique @db.Uuid
+  fullName              String?
+  age                   Int?
+  gender                Gender?
+  country               String?
+  skills                String[]            @default([])
+  expertiseTechnologyId String?             @db.Uuid
+  onboardingStep        Int                 @default(1)
+  completedSteps        Int[]               @default([])
+  onboardingCompletedAt DateTime?
+  pineconeVectorId      String?             // Pinecone vector ID for aggregate profile embedding (skills, experience, education, technologies)
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  user                  User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expertiseTechnology   Technology?         @relation(fields: [expertiseTechnologyId], references: [id])
+  githubAccount         GithubAccount?
+  experiences           Experience[]
+  educations            Education[]
+  languages             Language[]
+  projects              Project[]
+  projectChunks         ProjectChunk[]
+  jobPosts              JobPost[]
+  resumeJobs            ResumeJob[]
+  resumeVersions        ResumeVersion[]
+  sessions              InterviewSession[]
+}
+
+model GithubAccount {
+  id             String    @id @default(uuid()) @db.Uuid
+  profileId      String    @unique @db.Uuid
+  githubId       BigInt    @unique
+  login          String
+  accessTokenEnc String
+  scopes         String[]  @default([])
+  lastSyncedAt   DateTime?
+  syncStatus     String    @default("IDLE")
+  connectedAt    DateTime  @default(now())
+  profile        Profile   @relation(fields: [profileId], references: [id], onDelete: Cascade)
+}
+
+model Technology {
+  id        String             @id @default(uuid()) @db.Uuid
+  slug      String             @unique
+  name      String
+  isActive  Boolean            @default(true)
+  createdAt DateTime           @default(now())
+  questions Question[]
+  sessions  InterviewSession[]
+  profiles  Profile[]
+}
+
+model Experience {
+  id          String    @id @default(uuid()) @db.Uuid
+  profileId   String    @db.Uuid
+  company     String
+  title       String
+  location    String?
+  startDate   DateTime  @db.Date
+  endDate     DateTime? @db.Date
+  isCurrent   Boolean   @default(false)
+  description String?
+  profile     Profile   @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId])
+}
+
+model Education {
+  id          String  @id @default(uuid()) @db.Uuid
+  profileId   String  @db.Uuid
+  institution String
+  degree      String
+  field       String?
+  startYear   Int
+  endYear     Int?
+  grade       String?
+  profile     Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId])
+}
+
+model Language {
+  id        String        @id @default(uuid()) @db.Uuid
+  profileId String        @db.Uuid
+  name      String
+  level     LanguageLevel
+  profile   Profile       @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, name])
+}
