@@ -3,6 +3,7 @@ import { createServer } from "http";
 import app from "./app.js";
 import credentials from "./config/credentials.js";
 import redis from "./lib/redis.js";
+import prisma from "./lib/prisma";
 
 const PORT = credentials.port || 3000;
 
@@ -15,6 +16,9 @@ const main = async () => {
     if (result === "bar") {
       console.log("◇ [Redis]: Connected successfully");
     }
+
+    await prisma.$connect();
+    console.log("◇ [Prisma]: Connected successfully");
 
     server.listen(PORT, () => {
       console.log(

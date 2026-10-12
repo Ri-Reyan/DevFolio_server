@@ -11,7 +11,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use(helmet());
 
 app.get("/", (req, res) => {
-  res.send("Hello, World!");
+  res.send({ message: "Hello World!, server is running", status: 200 });
 });
 
 app.use(globalErrorHandler);
